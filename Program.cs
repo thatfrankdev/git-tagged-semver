@@ -1,50 +1,62 @@
 ﻿using System;
 using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
 using LibGit2Sharp;
+using Semver;
 
-namespace git_semver
+namespace git_tagged_semver
 {
-    public class Error
-    {
-        private Error(int code, string message = null)
-        {
-            Code = code;
-            Message = message;
-        }
-
-        public int Code { get; }
-        public string Message { get; }
-
-        public static Error NotARepository => new Error(1000, "Not a git repository!");
-        public static Error NoHeadCommit => new Error(2000, "Not head commit!");
-    }
-    
     class Program
     {
         static void Main(string[] args)
         {
-            var repoPath = Repository.Discover(Directory.GetCurrentDirectory());
+            var dirPath = args.FirstOrDefault() ?? Directory.GetCurrentDirectory();
+            var repoPath = Repository.Discover(dirPath);
             if (repoPath is null) ExitWithError(Error.NotARepository);
             using var repo = new Repository(repoPath);
-
+            
             var headCommit = repo.Head.Tip;
             if(headCommit is null) ExitWithError(Error.NoHeadCommit);
             
-            var describeString = repo.Describe(
-                headCommit, 
-                new DescribeOptions
-                {
-                    AlwaysRenderLongFormat = true,
-                    Strategy = DescribeStrategy.Tags
-                });
-                
-            Console.WriteLine(describeString);
+            string describeString = null;
+
+            try
+            {
+                describeString = repo.Describe(
+                    headCommit, 
+                    new DescribeOptions
+                    {
+                        AlwaysRenderLongFormat = true,
+                        Strategy = DescribeStrategy.Tags
+                    });
+            }
+            catch (LibGit2SharpException)
+            {
+                ExitWithError(Error.NoReferenceFound);
+            }
+            
+            if(describeString is null)
+                ExitWithUnexpectedError();
+
+            describeString = Regex.Replace(describeString, @"-(\d*-[a-z0-9]{8})$", "+$1");
+
+            if(!SemVersion.TryParse(describeString, out var semver))
+                ExitWithError(Error.InvalidFormat(describeString));
+            
+            Console.Out.WriteLine(semver.ToString());
         }
 
         private static void ExitWithError(Error error)
         {
-            Console.Error.WriteLine(error.Message);
+            Console.Error.WriteLine($"Error: {error.Message}");
             Environment.Exit(error.Code);
+        }
+
+        private static void ExitWithUnexpectedError()
+        {
+            Console.Error.WriteLine("An unexpected error occured");
+            Environment.Exit(-1);
         }
     }
 }
